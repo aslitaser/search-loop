@@ -209,6 +209,42 @@ class MockProposer(Proposer):
         return batch[:n]
 
 
+class CachingProposer(Proposer):
+    def __init__(self, inner: Proposer) -> None:
+        self.inner = inner
+        self.cache: dict[tuple[frozenset[str], frozenset[Action], bool], list[Action]] = {}
+        self.hits = 0
+        self.misses = 0
+
+    @property
+    def usage(self) -> UsageMeter:
+        return self.inner.usage
+
+    def _signature(self, state: State) -> tuple[frozenset[str], frozenset[Action], bool]:
+        return (
+            frozenset(state.evidence),
+            frozenset(observation.action for observation in state.observations),
+            state.resolved,
+        )
+
+    def propose(self, state: State, n: int) -> list[Action]:
+        signature = self._signature(state)
+        if signature in self.cache:
+            self.hits += 1
+            result = self.cache[signature]
+        else:
+            self.misses += 1
+            result = list(self.inner.propose(state, n))
+            self.cache[signature] = result
+
+        return result[:n]
+
+    def reset_cache(self) -> None:
+        self.cache.clear()
+        self.hits = 0
+        self.misses = 0
+
+
 class AnthropicProposer(Proposer):
     def __init__(
         self,

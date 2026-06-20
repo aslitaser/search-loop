@@ -6,15 +6,20 @@ searchloop is a planning agent that does MCTS tree search over tool calls, bench
 
 OpenAI and Anthropic action proposers are available behind the shared `Proposer` protocol.
 
+## MCTS
+
+Search uses a shaped leaf value, true reward plus an evidence bonus, while evaluation and benchmark reporting use the true environment reward.
+
 - [ ] scaffold
 - [x] tool harness
 - [x] state model
 - [x] llm client
 - [x] greedy baseline
 - [x] benchmark
-- [ ] mcts selection
-- [ ] mcts rollouts
-- [ ] progressive widening
+- [x] mcts selection
+- [x] mcts rollouts
+- [x] proposal caching
+- [x] progressive widening
 - [ ] tuning
 - [ ] trace collection
 - [ ] learned value head

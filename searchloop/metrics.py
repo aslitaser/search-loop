@@ -55,6 +55,9 @@ def run_benchmark(
         task = task_factory(seed)
         rng = random.Random(seed)
         proposer.usage.reset()
+        reset_cache = getattr(proposer, "reset_cache", None)
+        if callable(reset_cache):
+            reset_cache()
         start = perf_counter()
         result = runner(task, registry, proposer, rng)
         wall_ms = (perf_counter() - start) * 1000

@@ -2,11 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from searchloop.env import Action, State
+from searchloop.env import Action, Observation, State
 from searchloop.llm import (
     DEFAULT_OPENAI_MODEL,
     SYSTEM,
     AnthropicProposer,
+    CachingProposer,
     MockProposer,
     OpenAIProposer,
     UsageMeter,
@@ -14,7 +15,7 @@ from searchloop.llm import (
     render_state,
     render_tools,
 )
-from searchloop.tools import default_registry
+from searchloop.tools import ToolResult, default_registry
 
 
 def test_usage_meter_records_and_resets() -> None:
@@ -187,6 +188,64 @@ def test_mock_proposer_returns_scripted_batches_and_exhausts() -> None:
         proposer.propose(State.initial(), 1)
 
 
+def test_caching_proposer_signature_is_order_invariant() -> None:
+    action_a = Action.from_dict("get_logs", {"pod": "risingwave"})
+    action_b = Action.from_dict("get_metrics", {"query": "risingwave"})
+    first = _state_with_actions([action_a, action_b], evidence=frozenset({"ev_a"}))
+    second = _state_with_actions([action_b, action_a], evidence=frozenset({"ev_a"}))
+    different = _state_with_actions([action_b, action_a], evidence=frozenset({"ev_b"}))
+    proposer = CachingProposer(_CountingProposer([[action_a]]))
+
+    assert proposer._signature(first) == proposer._signature(second)
+    assert proposer._signature(first) != proposer._signature(different)
+
+
+def test_caching_proposer_hit_and_miss_with_transposed_state() -> None:
+    action_a = Action.from_dict("get_logs", {"pod": "risingwave"})
+    action_b = Action.from_dict("get_metrics", {"query": "risingwave"})
+    proposed = Action.from_dict("check_deploy", {"app": "risingwave"})
+    first = _state_with_actions([action_a, action_b], evidence=frozenset({"ev_a"}))
+    second = _state_with_actions([action_b, action_a], evidence=frozenset({"ev_a"}))
+    inner = _CountingProposer([[proposed]])
+    proposer = CachingProposer(inner)
+
+    assert proposer.propose(first, 4) == [proposed]
+    assert proposer.propose(second, 4) == [proposed]
+    assert inner.calls == 1
+    assert proposer.misses == 1
+    assert proposer.hits == 1
+
+
+def test_caching_proposer_usage_passthrough() -> None:
+    inner = _CountingProposer([[]])
+    proposer = CachingProposer(inner)
+
+    assert proposer.usage is inner.usage
+
+
+def test_caching_proposer_reset_cache_clears_and_remisses() -> None:
+    state = State.initial()
+    proposed = Action.from_dict("get_pods", {"namespace": "default"})
+    inner = _CountingProposer([[proposed], [proposed]])
+    proposer = CachingProposer(inner)
+
+    assert proposer.propose(state, 1) == [proposed]
+    assert proposer.propose(state, 1) == [proposed]
+    assert inner.calls == 1
+    assert proposer.hits == 1
+    assert proposer.misses == 1
+
+    proposer.reset_cache()
+
+    assert proposer.hits == 0
+    assert proposer.misses == 0
+    assert proposer.cache == {}
+    assert proposer.propose(state, 1) == [proposed]
+    assert inner.calls == 2
+    assert proposer.hits == 0
+    assert proposer.misses == 1
+
+
 def test_anthropic_proposer_uses_injected_client_and_truncates() -> None:
     registry = default_registry()
     text = """
@@ -312,6 +371,37 @@ def test_render_state_and_tools_on_empty_public_inputs() -> None:
 class _FakeClient:
     def __init__(self, text: str, usage: SimpleNamespace | None = None) -> None:
         self.messages = _FakeMessages(text, usage)
+
+
+def _state_with_actions(actions: list[Action], evidence: frozenset[str]) -> State:
+    observations = tuple(
+        Observation(
+            action=action,
+            result=ToolResult(ok=True, output="ok", latency_ms=1.0, error=None),
+            evidence_gained=None,
+        )
+        for action in actions
+    )
+    return State(
+        observations=observations,
+        evidence=evidence,
+        steps=len(observations),
+        resolved=False,
+        resolved_target=None,
+    )
+
+
+class _CountingProposer:
+    def __init__(self, batches: list[list[Action]]) -> None:
+        self._batches = batches
+        self.calls = 0
+        self.usage = UsageMeter()
+
+    def propose(self, state: State, n: int) -> list[Action]:
+        self.usage.record(0, 0)
+        batch = self._batches[self.calls]
+        self.calls += 1
+        return batch[:n]
 
 
 class _FakeMessages:

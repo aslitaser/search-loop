@@ -4,15 +4,17 @@ from __future__ import annotations
 import argparse
 import os
 
-from searchloop.agents import run_greedy
+from searchloop.agents import run_greedy, run_mcts
 from searchloop.env import make_task
 from searchloop.llm import (
     DEFAULT_MODEL,
     DEFAULT_OPENAI_MODEL,
     AnthropicProposer,
+    CachingProposer,
     OpenAIProposer,
     default_briefing,
 )
+from searchloop.mcts import MCTSConfig
 from searchloop.metrics import format_table, run_benchmark, summarize
 from searchloop.tools import default_registry
 
@@ -22,7 +24,15 @@ def main() -> int:
     parser.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
     parser.add_argument("--model")
     parser.add_argument("--seeds", default="0-49")
-    parser.add_argument("--agent", choices=["greedy"], default="greedy")
+    parser.add_argument("--agent", choices=["greedy", "mcts"], default="greedy")
+    parser.add_argument("--iterations", type=int, default=30)
+    parser.add_argument("--candidates", type=int, default=3)
+    parser.add_argument("--c", type=float, default=1.41421356)
+    parser.add_argument("--pw-k", type=float, default=1.0)
+    parser.add_argument("--pw-alpha", type=float, default=0.5)
+    parser.add_argument("--cache", dest="cache", action="store_true")
+    parser.add_argument("--no-cache", dest="cache", action="store_false")
+    parser.set_defaults(cache=True)
     args = parser.parse_args()
 
     seeds = _parse_seeds(args.seeds)
@@ -41,7 +51,29 @@ def main() -> int:
             return 0
         proposer = AnthropicProposer(registry, briefing, model=model)
 
-    runner = run_greedy
+    if args.cache:
+        proposer = CachingProposer(proposer)
+
+    if args.agent == "mcts":
+        config = MCTSConfig(
+            c_explore=args.c,
+            n_candidates=args.candidates,
+            max_iterations=args.iterations,
+            pw_k=args.pw_k,
+            pw_alpha=args.pw_alpha,
+        )
+
+        def runner(task, reg, prop, random_source):
+            return run_mcts(
+                task,
+                reg,
+                prop,
+                random_source,
+                config,
+            )
+
+    else:
+        runner = run_greedy
     rows = run_benchmark(runner, proposer, registry, seeds)
     print(format_table(rows, summarize(rows)))
     return 0

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from searchloop import env
 from searchloop.env import Action, State, Task, is_terminal, reward, step
 from searchloop.llm import Proposer
+from searchloop.mcts import MCTSConfig, mcts_search
 from searchloop.tools import ToolRegistry
 
 
@@ -38,6 +39,39 @@ def run_greedy(
 
         state, _ = step(task, state, action, registry, rng)
 
+    success = (
+        state.resolved
+        and state.resolved_target == task.culprit
+        and task.required_evidence <= state.evidence
+    )
+    correct_culprit = state.resolved and state.resolved_target == task.culprit
+    episode_reward = reward(task, state)
+
+    return EpisodeResult(
+        final_state=state,
+        reward=episode_reward,
+        steps=state.steps,
+        success=success,
+        correct_culprit=correct_culprit,
+        proposer_calls=proposer_calls,
+    )
+
+
+def run_mcts(
+    task: Task,
+    registry: ToolRegistry,
+    proposer: Proposer,
+    rng: random.Random,
+    config: MCTSConfig,
+) -> EpisodeResult:
+    calls0 = proposer.usage.calls
+    state = State.initial()
+
+    while not is_terminal(task, state):
+        action = mcts_search(task, registry, proposer, rng, config, state)
+        state, _ = step(task, state, action, registry, rng)
+
+    proposer_calls = proposer.usage.calls - calls0
     success = (
         state.resolved
         and state.resolved_target == task.culprit
