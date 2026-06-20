@@ -2,7 +2,7 @@ import random
 
 from searchloop import env
 from searchloop.agents import EpisodeResult, run_greedy
-from searchloop.env import Action, Task, probe_key
+from searchloop.env import Action, Reveal, Task
 from searchloop.llm import MockProposer
 from searchloop.tools import Tool, ToolRegistry
 
@@ -29,9 +29,9 @@ def test_greedy_happy_path_collects_evidence_and_resolves() -> None:
         culprit=culprit,
         required_evidence=evidence,
         reveals=(
-            (probe_key(probe1), "ev_a"),
-            (probe_key(probe2), "ev_b"),
-            (probe_key(probe3), "ev_c"),
+            Reveal("probe", "one", "ev_a"),
+            Reveal("probe", "two", "ev_b"),
+            Reveal("probe", "three", "ev_c"),
         ),
         max_steps=8,
     )
@@ -91,7 +91,7 @@ def test_greedy_is_deterministic_for_same_seed_and_script() -> None:
     task = Task(
         culprit=culprit,
         required_evidence=evidence,
-        reveals=((probe_key(probe), "ev_a"),),
+        reveals=(Reveal("probe", "one", "ev_a"),),
         max_steps=8,
     )
     registry = ToolRegistry([_probe_tool()])

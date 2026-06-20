@@ -3,7 +3,17 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from searchloop.env import Action, State, Task, is_terminal, make_task, probe_key, reward, step
+from searchloop.env import (
+    Action,
+    Reveal,
+    State,
+    Task,
+    is_terminal,
+    make_task,
+    revealed_token,
+    reward,
+    step,
+)
 from searchloop.tools import Tool, ToolRegistry
 
 
@@ -81,13 +91,64 @@ def test_step_does_not_mutate_input_state() -> None:
     assert len(new_state.observations) == 1
 
 
+def test_revealed_token_matches_correct_tool_and_arg_value_substring() -> None:
+    task = Task(
+        culprit="risingwave",
+        required_evidence=frozenset({"ev_risingwave_0"}),
+        reveals=(Reveal("get_logs", "risingwave", "ev_risingwave_0"),),
+        max_steps=8,
+    )
+
+    action = Action.from_dict("get_logs", {"pod": "risingwave"})
+
+    assert revealed_token(task, action) == "ev_risingwave_0"
+
+
+def test_revealed_token_matches_with_extra_args_present() -> None:
+    task = Task(
+        culprit="risingwave",
+        required_evidence=frozenset({"ev_risingwave_0"}),
+        reveals=(Reveal("get_logs", "risingwave", "ev_risingwave_0"),),
+        max_steps=8,
+    )
+
+    action = Action.from_dict("get_logs", {"pod": "risingwave", "lines": "100"})
+
+    assert revealed_token(task, action) == "ev_risingwave_0"
+
+
+def test_revealed_token_matches_embedded_name_in_arg_value() -> None:
+    task = Task(
+        culprit="risingwave",
+        required_evidence=frozenset({"ev_risingwave_1"}),
+        reveals=(Reveal("get_metrics", "risingwave", "ev_risingwave_1"),),
+        max_steps=8,
+    )
+
+    action = Action.from_dict("get_metrics", {"query": "error_rate{service='risingwave'}"})
+
+    assert revealed_token(task, action) == "ev_risingwave_1"
+
+
+def test_revealed_token_does_not_match_wrong_tool_or_missing_name() -> None:
+    task = Task(
+        culprit="risingwave",
+        required_evidence=frozenset({"ev_risingwave_0"}),
+        reveals=(Reveal("get_logs", "risingwave", "ev_risingwave_0"),),
+        max_steps=8,
+    )
+
+    assert revealed_token(task, Action.from_dict("get_metrics", {"query": "risingwave"})) is None
+    assert revealed_token(task, Action.from_dict("get_logs", {"pod": "catalog-service"})) is None
+
+
 def test_successful_step_reveals_evidence() -> None:
     action = Action.from_dict("probe", {"target": "svc"})
     token = "ev_probe"
     task = Task(
         culprit="svc",
         required_evidence=frozenset({token}),
-        reveals=((probe_key(action), token),),
+        reveals=(Reveal("probe", "svc", token),),
         max_steps=8,
     )
     registry = ToolRegistry([_tool("probe", failure_prob=0.0)])
@@ -104,7 +165,7 @@ def test_failed_step_does_not_reveal_evidence() -> None:
     task = Task(
         culprit="svc",
         required_evidence=frozenset({"ev_probe"}),
-        reveals=((probe_key(action), "ev_probe"),),
+        reveals=(Reveal("probe", "svc", "ev_probe"),),
         max_steps=8,
     )
     registry = ToolRegistry([_tool("probe", failure_prob=1.0)])
@@ -166,7 +227,20 @@ def test_reward_ordering_and_step_penalty() -> None:
 
 
 def test_make_task_is_reproducible_and_varies_across_seeds() -> None:
-    assert make_task(7) == make_task(7)
+    task = make_task(7)
+
+    assert task == make_task(7)
+    assert len(task.reveals) == 3
+    assert [reveal.tool for reveal in task.reveals] == [
+        "get_logs",
+        "get_metrics",
+        "check_deploy",
+    ]
+    assert all(reveal.arg_value == task.culprit for reveal in task.reveals)
+    assert task.required_evidence == frozenset(
+        f"ev_{task.culprit}_{index}" for index in range(3)
+    )
+    assert {reveal.token for reveal in task.reveals} == task.required_evidence
 
     culprits = {make_task(seed).culprit for seed in range(21)}
 

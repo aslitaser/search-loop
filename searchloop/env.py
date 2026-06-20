@@ -57,15 +57,28 @@ class State:
 
 
 @dataclass(frozen=True)
+class Reveal:
+    tool: str
+    arg_value: str
+    token: str
+
+
+@dataclass(frozen=True)
 class Task:
     culprit: str
     required_evidence: frozenset[str]
-    reveals: tuple[tuple[str, str], ...]
+    reveals: tuple[Reveal, ...]
     max_steps: int
 
 
-def probe_key(action: Action) -> str:
-    return f"{action.tool}|" + ",".join(value for _, value in action.args)
+def revealed_token(task: Task, action: Action) -> str | None:
+    action_args = action.args_dict()
+    for reveal in task.reveals:
+        if action.tool == reveal.tool and any(
+            reveal.arg_value in value for value in action_args.values()
+        ):
+            return reveal.token
+    return None
 
 
 def step(
@@ -85,9 +98,7 @@ def step(
         resolved_target = target
     else:
         result = registry.get(action.tool).execute(action.args_dict(), rng)
-        key = probe_key(action)
-        reveal_map = dict(task.reveals)
-        evidence_gained = reveal_map[key] if result.ok and key in reveal_map else None
+        evidence_gained = revealed_token(task, action) if result.ok else None
         new_evidence = state.evidence | {evidence_gained} if evidence_gained else state.evidence
         resolved = state.resolved
         resolved_target = state.resolved_target
@@ -130,20 +141,11 @@ def reward(task: Task, state: State) -> float:
 def make_task(seed: int) -> Task:
     rng = random.Random(seed)
     culprit = rng.choice(SERVICES)
-    metric_service = rng.choice(SERVICES)
     tokens = tuple(f"ev_{culprit}_{index}" for index in range(3))
     reveals = (
-        (probe_key(Action.from_dict("get_logs", {"pod": culprit})), tokens[0]),
-        (
-            probe_key(
-                Action.from_dict(
-                    "get_metrics",
-                    {"query": f"error_rate{{service='{metric_service}'}}"},
-                )
-            ),
-            tokens[1],
-        ),
-        (probe_key(Action.from_dict("check_deploy", {"app": culprit})), tokens[2]),
+        Reveal("get_logs", culprit, tokens[0]),
+        Reveal("get_metrics", culprit, tokens[1]),
+        Reveal("check_deploy", culprit, tokens[2]),
     )
 
     return Task(

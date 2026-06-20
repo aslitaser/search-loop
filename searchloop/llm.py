@@ -50,6 +50,9 @@ def default_briefing(max_steps: int) -> str:
         "You are investigating which service is the culprit. "
         f"The candidate services are: {services}. "
         "Use the available tools to gather evidence. "
+        "Investigate a service by passing its name as the relevant tool argument; "
+        "pointing get_logs, get_metrics, and check_deploy at the true culprit service "
+        "yields evidence, which you should collect before resolving. "
         'When confident, emit a resolve action with args {"target": "<service>"}. '
         f"You have at most {max_steps} actions."
     )
