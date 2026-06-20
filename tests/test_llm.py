@@ -4,15 +4,35 @@ import pytest
 
 from searchloop.env import Action, State
 from searchloop.llm import (
+    DEFAULT_OPENAI_MODEL,
     SYSTEM,
     AnthropicProposer,
     MockProposer,
+    OpenAIProposer,
     ProposalError,
+    UsageMeter,
     parse_actions,
     render_state,
     render_tools,
 )
 from searchloop.tools import default_registry
+
+
+def test_usage_meter_records_and_resets() -> None:
+    meter = UsageMeter()
+
+    meter.record(10, 3)
+    meter.record(7, 2)
+
+    assert meter.input_tokens == 17
+    assert meter.output_tokens == 5
+    assert meter.calls == 2
+
+    meter.reset()
+
+    assert meter.input_tokens == 0
+    assert meter.output_tokens == 0
+    assert meter.calls == 0
 
 
 def test_parse_actions_happy_path() -> None:
@@ -128,6 +148,89 @@ def test_anthropic_proposer_uses_injected_client_and_truncates() -> None:
     assert call["system"] == SYSTEM
 
 
+def test_anthropic_proposer_records_usage() -> None:
+    fake_client = _FakeClient(
+        '[{"tool": "get_pods", "args": {"namespace": "prod"}}]',
+        usage=SimpleNamespace(input_tokens=120, output_tokens=30),
+    )
+    proposer = AnthropicProposer(
+        default_registry(),
+        briefing="public briefing",
+        client=fake_client,
+    )
+
+    proposer.propose(State.initial(), 1)
+
+    assert proposer.usage.input_tokens == 120
+    assert proposer.usage.output_tokens == 30
+    assert proposer.usage.calls == 1
+
+
+def test_openai_proposer_uses_injected_client_and_truncates() -> None:
+    registry = default_registry()
+    text = """
+    [
+      {"tool": "get_pods", "args": {"namespace": "prod"}},
+      {"tool": "resolve", "args": {"target": "catalog-service"}}
+    ]
+    """
+    fake_client = _FakeOpenAIClient(text)
+    proposer = OpenAIProposer(
+        registry,
+        briefing="public briefing",
+        model="configured-openai-model",
+        client=fake_client,
+        max_tokens=88,
+        temperature=0.4,
+    )
+
+    actions = proposer.propose(State.initial(), 1)
+
+    assert actions == [Action.from_dict("get_pods", {"namespace": "prod"})]
+    call = fake_client.chat.completions.calls[0]
+    assert call["model"] == "configured-openai-model"
+    assert call["max_tokens"] == 88
+    assert call["temperature"] == 0.4
+    assert call["messages"][0] == {"role": "system", "content": SYSTEM}
+    assert call["messages"][1]["role"] == "user"
+
+
+def test_openai_proposer_records_usage() -> None:
+    fake_client = _FakeOpenAIClient(
+        '[{"tool": "get_pods", "args": {"namespace": "prod"}}]',
+        usage=SimpleNamespace(prompt_tokens=120, completion_tokens=30),
+    )
+    proposer = OpenAIProposer(
+        default_registry(),
+        briefing="public briefing",
+        client=fake_client,
+    )
+
+    proposer.propose(State.initial(), 1)
+
+    assert proposer.usage.input_tokens == 120
+    assert proposer.usage.output_tokens == 30
+    assert proposer.usage.calls == 1
+
+
+def test_openai_proposer_uses_completion_token_param_for_default_model() -> None:
+    fake_client = _FakeOpenAIClient('[{"tool": "get_pods", "args": {"namespace": "prod"}}]')
+    proposer = OpenAIProposer(
+        default_registry(),
+        briefing="public briefing",
+        client=fake_client,
+        max_tokens=55,
+    )
+
+    proposer.propose(State.initial(), 1)
+
+    call = fake_client.chat.completions.calls[0]
+    assert call["model"] == DEFAULT_OPENAI_MODEL
+    assert call["max_completion_tokens"] == 55
+    assert "max_tokens" not in call
+    assert "temperature" not in call
+
+
 def test_render_state_and_tools_on_empty_public_inputs() -> None:
     state_text = render_state(State.initial())
     tools_text = render_tools(default_registry())
@@ -141,17 +244,42 @@ def test_render_state_and_tools_on_empty_public_inputs() -> None:
 
 
 class _FakeClient:
-    def __init__(self, text: str) -> None:
-        self.messages = _FakeMessages(text)
+    def __init__(self, text: str, usage: SimpleNamespace | None = None) -> None:
+        self.messages = _FakeMessages(text, usage)
 
 
 class _FakeMessages:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, usage: SimpleNamespace | None = None) -> None:
         self._text = text
+        self._usage = usage
         self.calls = []
 
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
         return SimpleNamespace(
             content=[SimpleNamespace(type="text", text=self._text)],
+            usage=self._usage,
+        )
+
+
+class _FakeOpenAIClient:
+    def __init__(self, text: str, usage: SimpleNamespace | None = None) -> None:
+        self.chat = SimpleNamespace(completions=_FakeOpenAICompletions(text, usage))
+
+
+class _FakeOpenAICompletions:
+    def __init__(self, text: str, usage: SimpleNamespace | None = None) -> None:
+        self._text = text
+        self._usage = usage
+        self.calls = []
+
+    def create(self, **kwargs: object) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=self._text),
+                )
+            ],
+            usage=self._usage,
         )
