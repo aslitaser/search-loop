@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -97,31 +98,90 @@ def build_user_prompt(briefing: str, registry: ToolRegistry, state: State, n: in
 
 
 def parse_actions(text: str, allowed_tools: set[str]) -> list[Action]:
-    parsed = json.loads(_strip_markdown_fence(text))
-    if not isinstance(parsed, list):
-        raise ProposalError("Expected a JSON array of action objects")
+    stripped = _strip_markdown_fence(text).strip()
+    if not stripped:
+        return []
 
     actions = []
     seen = set()
-    for item in parsed:
-        if not isinstance(item, dict):
-            continue
+    for value in _extract_json_values(stripped):
+        for item in _iter_action_dicts(value):
+            action = _coerce_action(item, allowed_tools)
+            if action is None or action in seen:
+                continue
 
-        tool = item.get("tool")
-        args = item.get("args")
-        if tool not in allowed_tools or not isinstance(args, dict):
-            continue
-        if not all(isinstance(name, str) for name in args):
-            continue
-
-        action = Action.from_dict(tool, {name: str(value) for name, value in args.items()})
-        if action in seen:
-            continue
-
-        actions.append(action)
-        seen.add(action)
+            actions.append(action)
+            seen.add(action)
 
     return actions
+
+
+def _extract_json_values(s: str) -> list[object]:
+    decoder = json.JSONDecoder()
+    values = []
+    index = 0
+    while index < len(s):
+        starts = [
+            position
+            for position in (s.find("{", index), s.find("[", index))
+            if position != -1
+        ]
+        if not starts:
+            break
+
+        start = min(starts)
+        try:
+            value, end = decoder.raw_decode(s, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+
+        values.append(value)
+        index = end
+
+    return values
+
+
+def _iter_action_dicts(value: object) -> Iterator[dict[str, Any]]:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                yield item
+        return
+
+    if not isinstance(value, dict):
+        return
+
+    found_wrapper = False
+    for key in ("actions", "tools", "calls"):
+        items = value.get(key)
+        if not isinstance(items, list):
+            continue
+
+        found_wrapper = True
+        for item in items:
+            if isinstance(item, dict):
+                yield item
+
+    if not found_wrapper and "tool" in value:
+        yield value
+
+
+def _coerce_action(item: object, allowed_tools: set[str]) -> Action | None:
+    if not isinstance(item, dict):
+        return None
+
+    tool = item.get("tool")
+    if not isinstance(tool, str) or tool not in allowed_tools:
+        return None
+
+    args = item.get("args", {})
+    if not isinstance(args, dict):
+        args = {}
+    if not all(isinstance(name, str) for name in args):
+        return None
+
+    return Action.from_dict(tool, {name: str(value) for name, value in args.items()})
 
 
 class Proposer(Protocol):
@@ -162,6 +222,7 @@ class AnthropicProposer(Proposer):
         self.max_tokens = max_tokens
         self.allowed = set(registry.names()) | {"resolve"}
         self.usage = UsageMeter()
+        self.last_raw = ""
 
     @property
     def client(self) -> Any:
@@ -186,6 +247,7 @@ class AnthropicProposer(Proposer):
         text = "".join(
             block.text for block in resp.content if getattr(block, "type", None) == "text"
         )
+        self.last_raw = text
         return parse_actions(text, self.allowed)[:n]
 
 
@@ -207,6 +269,7 @@ class OpenAIProposer(Proposer):
         self.temperature = temperature
         self.allowed = set(registry.names()) | {"resolve"}
         self.usage = UsageMeter()
+        self.last_raw = ""
 
     @property
     def client(self) -> Any:
@@ -237,6 +300,7 @@ class OpenAIProposer(Proposer):
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         self.usage.record(input_tokens, output_tokens)
         text = resp.choices[0].message.content or ""
+        self.last_raw = text
         return parse_actions(text, self.allowed)[:n]
 
 

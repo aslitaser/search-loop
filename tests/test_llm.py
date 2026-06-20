@@ -9,7 +9,6 @@ from searchloop.llm import (
     AnthropicProposer,
     MockProposer,
     OpenAIProposer,
-    ProposalError,
     UsageMeter,
     parse_actions,
     render_state,
@@ -51,6 +50,66 @@ def test_parse_actions_happy_path() -> None:
     ]
 
 
+def test_parse_actions_skips_leading_empty_array_and_uses_later_array() -> None:
+    text = '[]\n\n[{"tool":"get_pods","args":{"namespace":"default"}}]'
+
+    actions = parse_actions(text, {"get_pods"})
+
+    assert actions == [Action.from_dict("get_pods", {"namespace": "default"})]
+
+
+def test_parse_actions_accepts_jsonl_action_objects() -> None:
+    text = """
+    {"tool": "get_pods", "args": {"namespace": "prod"}}
+    {"tool": "resolve", "args": {"target": "auction-engine"}}
+    """
+
+    actions = parse_actions(text, {"get_pods", "resolve"})
+
+    assert actions == [
+        Action.from_dict("get_pods", {"namespace": "prod"}),
+        Action.from_dict("resolve", {"target": "auction-engine"}),
+    ]
+
+
+def test_parse_actions_accepts_prose_around_json() -> None:
+    text = """
+    Here are the actions:
+    [{"tool": "get_pods", "args": {"namespace": "prod"}}]
+    Done.
+    """
+
+    actions = parse_actions(text, {"get_pods"})
+
+    assert actions == [Action.from_dict("get_pods", {"namespace": "prod"})]
+
+
+def test_parse_actions_accepts_wrapping_object() -> None:
+    text = """
+    {
+      "actions": [
+        {"tool": "get_pods", "args": {"namespace": "prod"}},
+        {"tool": "resolve", "args": {"target": "auction-engine"}}
+      ]
+    }
+    """
+
+    actions = parse_actions(text, {"get_pods", "resolve"})
+
+    assert actions == [
+        Action.from_dict("get_pods", {"namespace": "prod"}),
+        Action.from_dict("resolve", {"target": "auction-engine"}),
+    ]
+
+
+def test_parse_actions_accepts_single_action_object() -> None:
+    text = '{"tool":"resolve","args":{"target":"auction-engine"}}'
+
+    actions = parse_actions(text, {"resolve"})
+
+    assert actions == [Action.from_dict("resolve", {"target": "auction-engine"})]
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -68,8 +127,8 @@ def test_parse_actions_skips_invalid_elements() -> None:
     text = """
     [
       {"tool": "unknown", "args": {"pod": "api"}},
-      {"tool": "get_logs"},
-      {"tool": "get_logs", "args": "pod=api"},
+      {"tool": 123, "args": {"pod": "api"}},
+      {"args": {"pod": "api"}},
       "not an object",
       {"tool": "get_logs", "args": {"pod": "api", "lines": "20"}}
     ]
@@ -78,6 +137,12 @@ def test_parse_actions_skips_invalid_elements() -> None:
     actions = parse_actions(text, {"get_logs"})
 
     assert actions == [Action.from_dict("get_logs", {"pod": "api", "lines": "20"})]
+
+
+def test_parse_actions_uses_empty_args_when_args_is_not_a_dict() -> None:
+    actions = parse_actions('[{"tool": "get_logs", "args": "pod=api"}]', {"get_logs"})
+
+    assert actions == [Action.from_dict("get_logs", {})]
 
 
 def test_parse_actions_coerces_arg_values_to_strings() -> None:
@@ -103,9 +168,9 @@ def test_parse_actions_dedups_preserving_order() -> None:
     ]
 
 
-def test_parse_actions_raises_when_top_level_is_not_list() -> None:
-    with pytest.raises(ProposalError, match="Expected a JSON array"):
-        parse_actions('{"tool": "get_logs", "args": {}}', {"get_logs"})
+@pytest.mark.parametrize("text", ["", "not json at all", '{"actions": "not-a-list"}'])
+def test_parse_actions_returns_empty_for_unparseable_or_irrelevant_input(text: str) -> None:
+    assert parse_actions(text, {"get_logs"}) == []
 
 
 def test_mock_proposer_returns_scripted_batches_and_exhausts() -> None:
@@ -187,6 +252,7 @@ def test_openai_proposer_uses_injected_client_and_truncates() -> None:
     actions = proposer.propose(State.initial(), 1)
 
     assert actions == [Action.from_dict("get_pods", {"namespace": "prod"})]
+    assert proposer.last_raw == text
     call = fake_client.chat.completions.calls[0]
     assert call["model"] == "configured-openai-model"
     assert call["max_tokens"] == 88
