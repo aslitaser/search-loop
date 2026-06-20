@@ -20,7 +20,7 @@ Search uses a shaped leaf value, true reward plus an evidence bonus, while evalu
 - [x] mcts rollouts
 - [x] proposal caching
 - [x] progressive widening
-- [ ] tuning
+- [x] tuning
 - [ ] trace collection
 - [ ] learned value head
 - [ ] ablations
