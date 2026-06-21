@@ -316,8 +316,25 @@ def test_openai_proposer_uses_injected_client_and_truncates() -> None:
     assert call["model"] == "configured-openai-model"
     assert call["max_tokens"] == 88
     assert call["temperature"] == 0.4
+    assert "seed" not in call
     assert call["messages"][0] == {"role": "system", "content": SYSTEM}
     assert call["messages"][1]["role"] == "user"
+
+
+def test_openai_proposer_passes_seed_when_configured() -> None:
+    fake_client = _FakeOpenAIClient('[{"tool": "get_pods", "args": {"namespace": "prod"}}]')
+    proposer = OpenAIProposer(
+        default_registry(),
+        briefing="public briefing",
+        model="configured-openai-model",
+        client=fake_client,
+        seed=123,
+    )
+
+    proposer.propose(State.initial(), 1)
+
+    call = fake_client.chat.completions.calls[0]
+    assert call["seed"] == 123
 
 
 def test_openai_proposer_records_usage() -> None:

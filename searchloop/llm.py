@@ -245,6 +245,7 @@ class CachingProposer(Proposer):
         self.misses = 0
 
 
+# Anthropic has no seed parameter; for Anthropic ablation comparability, use temperature=0.
 class AnthropicProposer(Proposer):
     def __init__(
         self,
@@ -299,6 +300,7 @@ class OpenAIProposer(Proposer):
         client: Any | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        seed: int | None = None,
     ) -> None:
         self.registry = registry
         self.briefing = briefing
@@ -306,6 +308,7 @@ class OpenAIProposer(Proposer):
         self._client = client
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.seed = seed
         self.allowed = set(registry.names()) | {"resolve"}
         self.usage = UsageMeter()
         self.last_raw = ""
@@ -332,6 +335,9 @@ class OpenAIProposer(Proposer):
         else:
             kwargs["max_tokens"] = self.max_tokens
             kwargs["temperature"] = self.temperature
+
+        if self.seed is not None:
+            kwargs["seed"] = self.seed
 
         resp = self.client.chat.completions.create(**kwargs)
         usage = getattr(resp, "usage", None)

@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--evidence-bonus", type=float, default=0.25)
     parser.add_argument("--pw-k", type=float, default=1.0)
     parser.add_argument("--pw-alpha", type=float, default=0.5)
+    parser.add_argument("--proposer-seed", type=int, default=0)
     args = parser.parse_args()
 
     if args.provider == "openai":
@@ -47,7 +48,7 @@ def main() -> int:
     registry = default_registry()
     briefing = default_briefing(make_task(seeds[0]).max_steps if seeds else 8)
     model = args.model or _default_model(args.provider)
-    proposer = _build_proposer(args.provider, registry, briefing, model)
+    proposer = _build_proposer(args.provider, registry, briefing, model, args.proposer_seed)
     value_fn = _load_value_fn(args.value_model)
     variants = _build_variants(args, value_fn)
 
@@ -149,9 +150,15 @@ def _load_value_fn(path: str):
     return make_value_fn(model, mean, std)
 
 
-def _build_proposer(provider: str, registry: ToolRegistry, briefing: str, model: str) -> Proposer:
+def _build_proposer(
+    provider: str,
+    registry: ToolRegistry,
+    briefing: str,
+    model: str,
+    seed: int | None,
+) -> Proposer:
     if provider == "openai":
-        return OpenAIProposer(registry, briefing, model=model)
+        return OpenAIProposer(registry, briefing, model=model, seed=seed)
     return AnthropicProposer(registry, briefing, model=model)
 
 
