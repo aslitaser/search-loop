@@ -17,6 +17,7 @@ from searchloop.llm import (
 from searchloop.mcts import MCTSConfig
 from searchloop.metrics import format_table, run_benchmark, summarize
 from searchloop.tools import default_registry
+from searchloop.value import load_model, make_value_fn
 
 
 def main() -> int:
@@ -32,6 +33,7 @@ def main() -> int:
     parser.add_argument("--pw-alpha", type=float, default=0.5)
     parser.add_argument("--cache", dest="cache", action="store_true")
     parser.add_argument("--no-cache", dest="cache", action="store_false")
+    parser.add_argument("--value-model")
     parser.set_defaults(cache=True)
     args = parser.parse_args()
 
@@ -54,6 +56,11 @@ def main() -> int:
     if args.cache:
         proposer = CachingProposer(proposer)
 
+    value_fn = None
+    if args.value_model:
+        model, mean, std = load_model(args.value_model)
+        value_fn = make_value_fn(model, mean, std)
+
     if args.agent == "mcts":
         config = MCTSConfig(
             c_explore=args.c,
@@ -70,6 +77,7 @@ def main() -> int:
                 prop,
                 random_source,
                 config,
+                value_fn=value_fn,
             )
 
     else:

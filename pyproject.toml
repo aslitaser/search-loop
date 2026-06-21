@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.111.0",
+    "numpy>=2.4.6",
     "openai>=2.43.0",
 ]
 

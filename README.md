@@ -21,6 +21,6 @@ Search uses a shaped leaf value, true reward plus an evidence bonus, while evalu
 - [x] proposal caching
 - [x] progressive widening
 - [x] tuning
-- [ ] trace collection
-- [ ] learned value head
+- [x] trace collection
+- [x] learned value head
 - [ ] ablations

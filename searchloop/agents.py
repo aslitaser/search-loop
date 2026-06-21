@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from searchloop import env
@@ -8,6 +9,7 @@ from searchloop.env import Action, State, Task, is_terminal, reward, step
 from searchloop.llm import Proposer
 from searchloop.mcts import MCTSConfig, mcts_search
 from searchloop.tools import ToolRegistry
+from searchloop.traces import TraceCollector
 
 
 @dataclass(frozen=True)
@@ -63,12 +65,23 @@ def run_mcts(
     proposer: Proposer,
     rng: random.Random,
     config: MCTSConfig,
+    trace: TraceCollector | None = None,
+    value_fn: Callable[[list[float]], float] | None = None,
 ) -> EpisodeResult:
     calls0 = proposer.usage.calls
     state = State.initial()
 
     while not is_terminal(task, state):
-        action = mcts_search(task, registry, proposer, rng, config, state)
+        action = mcts_search(
+            task,
+            registry,
+            proposer,
+            rng,
+            config,
+            state,
+            trace=trace,
+            value_fn=value_fn,
+        )
         state, _ = step(task, state, action, registry, rng)
 
     proposer_calls = proposer.usage.calls - calls0

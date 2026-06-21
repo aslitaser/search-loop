@@ -9,6 +9,7 @@ from searchloop import env
 from searchloop.env import Action, State, Task, is_terminal, reward, step
 from searchloop.llm import Proposer
 from searchloop.tools import ToolRegistry
+from searchloop.traces import TraceCollector, state_features
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,8 @@ def mcts_search(
     rng: random.Random,
     config: MCTSConfig,
     root_state: State,
+    trace: TraceCollector | None = None,
+    value_fn: Callable[[list[float]], float] | None = None,
 ) -> Action:
     root = MCTSNode(
         state=root_state,
@@ -181,14 +184,20 @@ def mcts_search(
                     untried=None,
                 )
 
-        value = rollout(
-            task,
-            node.state,
-            registry,
-            rng,
-            config.rollout_depth,
-            config.evidence_bonus,
-        )
+        features = state_features(node.state, task.max_steps)
+        if value_fn is not None:
+            value = value_fn(features)
+        else:
+            value = rollout(
+                task,
+                node.state,
+                registry,
+                rng,
+                config.rollout_depth,
+                config.evidence_bonus,
+            )
+        if trace is not None:
+            trace.record(features, value)
         backpropagate(node, value)
 
     if not root.children:
