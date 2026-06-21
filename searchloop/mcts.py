@@ -22,6 +22,7 @@ class MCTSConfig:
     evidence_bonus: float = 0.25
     pw_k: float = 1.0
     pw_alpha: float = 0.5
+    use_pw: bool = True
 
 
 @dataclass
@@ -62,6 +63,11 @@ def pw_limit(node: MCTSNode, k: float, alpha: float) -> int:
 
 
 def is_expandable(node: MCTSNode, config: MCTSConfig) -> bool:
+    if not config.use_pw:
+        return (not node.terminal) and (
+            node.untried_actions is None or len(node.untried_actions) > 0
+        )
+
     return (not node.terminal) and (
         node.untried_actions is None
         or (
@@ -172,7 +178,10 @@ def mcts_search(
                 node.untried_actions = list(proposer.propose(node.state, config.n_candidates))
             if (
                 node.untried_actions
-                and len(node.children) < pw_limit(node, config.pw_k, config.pw_alpha)
+                and (
+                    not config.use_pw
+                    or len(node.children) < pw_limit(node, config.pw_k, config.pw_alpha)
+                )
             ):
                 action = node.untried_actions.pop(0)
                 child_state, _ = step(task, node.state, action, registry, rng)

@@ -23,4 +23,4 @@ Search uses a shaped leaf value, true reward plus an evidence bonus, while evalu
 - [x] tuning
 - [x] trace collection
 - [x] learned value head
-- [ ] ablations
+- [x] ablations
